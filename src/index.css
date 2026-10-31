@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --ink-950: 0.129 0.042 264.695;
+    --navy-900: 0.208 0.042 265.755;
+    --blue-500: 0.623 0.214 259.815;
+    --teal-500: 0.704 0.123 182.503;
+    --paper-50: 0.984 0.003 247.858;
+
+    --background: var(--paper-50);
+    --foreground: var(--navy-900);
+    --card: 0.992 0.002 247.858;
+    --card-foreground: var(--navy-900);
+    --popover: 0.992 0.002 247.858;
+    --popover-foreground: var(--navy-900);
+    --primary: var(--navy-900);
+    --primary-foreground: var(--paper-50);
+    --secondary: 0.968 0.007 247.896;
+    --secondary-foreground: var(--navy-900);
+    --muted: 0.968 0.007 247.896;
+    --muted-foreground: 0.554 0.046 257.417;
+    --accent: 0.953 0.025 249.0;
+    --accent-foreground: 0.398 0.141 254.0;
+    --destructive: 0.577 0.245 27.325;
+    --destructive-foreground: var(--paper-50);
+    --success: var(--teal-500);
+    --border: 0.882 0.016 250.0;
+    --input: 0.845 0.02 250.0;
+    --ring: var(--blue-500);
+    --radius: 0.5rem;
+    --sidebar-background: var(--ink-950);
+    --sidebar-foreground: 0.872 0.018 254.0;
+    --sidebar-primary: var(--blue-500);
+    --sidebar-primary-foreground: var(--paper-50);
+    --sidebar-accent: 0.253 0.041 264.0;
+    --sidebar-accent-foreground: var(--paper-50);
+    --sidebar-border: 0.3 0.035 264.0;
+    --sidebar-ring: var(--blue-500);
+  }
+  * { @apply border-border; }
+  html { font-family: 'Neue Haas Grotesk Display', 'Haffer', 'Helvetica Neue', Arial, sans-serif; }
+  body { @apply bg-background text-foreground; min-width: 320px; font-size: 16px; line-height: 1.5; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button, a { @apply cursor-pointer; }
+  ::selection { background: oklch(0.9 0.06 259.815); }
+  :focus-visible { outline: 2px solid oklch(var(--ring)); outline-offset: 2px; }
+}
+
+@layer components {
+  .surface { @apply rounded-lg border bg-card text-card-foreground; }
+  .field-label { @apply mb-1.5 block text-sm font-medium text-foreground; }
+  .field-error { @apply mt-1 text-xs font-medium text-red-700; }
+  .table-shell { @apply w-full border-collapse text-left text-sm; }
+  .table-shell thead { @apply border-y bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600; }
+  .table-shell th { @apply px-4 py-3; }
+  .table-shell td { @apply border-b px-4 py-3 align-middle; }
+  .table-shell tbody tr { @apply transition-colors hover:bg-slate-50; }
+}
+
+@media print {
+  body * { visibility: hidden !important; }
+  #print-area, #print-area * { visibility: visible !important; }
+  #print-area { position: absolute !important; inset: 0 !important; width: 80mm !important; padding: 4mm !important; color: #000 !important; background: #fff !important; }
+  .no-print { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}

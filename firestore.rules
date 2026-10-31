@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isSuperAdmin() { return signedIn() && request.auth.token.superAdmin == true; }
+    function isMember(shopId) {
+      return signedIn() && exists(/databases/$(database)/documents/shops/$(shopId)/members/$(request.auth.uid));
+    }
+
+    match /users/{userId} {
+      allow get: allow read: if (signedIn() && request.auth.uid == userId) || isSuperAdmin();
+      allow create: if signedIn() && request.auth.uid == userId
+        && request.resource.data.role == 'unassigned'
+        && !('shopId' in request.resource.data)
+        && request.resource.data.keys().hasOnly(['name', 'email', 'role', 'createdAt']);
+      allow update: if signedIn() && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shops/{shopId} {
+      allow read: if isMember(shopId) || isSuperAdmin();
+      allow create, update, delete: if false;
+
+      match /{collection}/{documentId} {
+        allow read: if isMember(shopId) || isSuperAdmin();
+        allow create, update, delete: if false;
+      }
+      match /{collection}/{documentId}/{nested=**} {
+        allow read: if isMember(shopId) || isSuperAdmin();
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
