@@ -1,9 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updateProfile } from 'firebase/auth'
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
-import { firebaseServices, isFirebaseConfigured } from '@/lib/firebase'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { api, apiConfigured } from '@/lib/api'
+import { setAccessToken } from '@/lib/apiSession'
 import { demoShop, demoUser } from '@/services/demoData'
 import type { Role, Shop, UserProfile } from '@/types'
 import type { ShopFormValues } from '@/schemas'
@@ -13,7 +11,7 @@ interface AuthContextValue {
   shop: Shop | null
   loading: boolean
   demo: boolean
-  firebaseConfigured: boolean
+  apiConfigured: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (name: string, email: string, password: string) => Promise<void>
   resetPassword: (email: string) => Promise<void>
@@ -24,70 +22,84 @@ interface AuthContextValue {
   updateAccount: (name: string) => Promise<void>
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null)
-
-function normalize<T>(id: string, document: Record<string, unknown>): T {
-  return { id, ...Object.fromEntries(Object.entries(document).map(([key, value]) => [key, value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function' ? value.toDate().toISOString() : value])) } as T
+interface AuthResponse {
+  accessToken: string
+  user: UserProfile
 }
+
+interface ProfileResponse {
+  user: UserProfile
+  shop: Shop | null
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [shop, setShop] = useState<Shop | null>(null)
-  const [loading, setLoading] = useState(isFirebaseConfigured)
+  const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
 
-  const loadProfile = useCallback(async (uid: string) => {
-    const { db } = firebaseServices()
-    const snapshot = await getDoc(doc(db, 'users', uid))
-    if (!snapshot.exists()) {
-      setUser(null)
-      setShop(null)
-      return
-    }
-    const profile = normalize<UserProfile>(snapshot.id, snapshot.data())
-    setUser(profile)
-    if (profile.shopId) {
-      const shopSnapshot = await getDoc(doc(db, 'shops', profile.shopId))
-      setShop(shopSnapshot.exists() ? normalize<Shop>(shopSnapshot.id, shopSnapshot.data()) : null)
-    } else setShop(null)
-  }, [])
+  const loadProfile = async () => {
+    const profile = await api.get<ProfileResponse>('/auth/me')
+    setUser(profile.user)
+    setShop(profile.shop)
+  }
 
   useEffect(() => {
-    if (!isFirebaseConfigured || demo) {
-      setLoading(false)
-      return
-    }
-    const { auth } = firebaseServices()
-    return onAuthStateChanged(auth, async (firebaseUser) => {
-      setLoading(true)
-      try {
-        if (firebaseUser) await loadProfile(firebaseUser.uid)
-        else { setUser(null); setShop(null) }
-      } finally { setLoading(false) }
-    })
-  }, [demo, loadProfile])
+    let active = true
+    api.get<ProfileResponse>('/auth/me')
+      .then((profile) => {
+        if (!active) return
+        setUser(profile.user)
+        setShop(profile.shop)
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && 'status' in error && error.status !== 401) {
+          console.error('Could not restore the API session', error)
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [])
 
   const value: AuthContextValue = {
-    user, shop, loading, demo, firebaseConfigured: isFirebaseConfigured,
+    user, shop, loading, demo, apiConfigured,
     signIn: async (email, password) => {
-      await signInWithEmailAndPassword(firebaseServices().auth, email, password)
+      const result = await api.post<AuthResponse>('/auth/login', { email, password })
+      setAccessToken(result.accessToken)
+      setUser(result.user)
+      setShop(null)
+      await loadProfile()
     },
     signUp: async (name, email, password) => {
-      const { auth, db } = firebaseServices()
-      const credential = await createUserWithEmailAndPassword(auth, email, password)
-      await updateProfile(credential.user, { displayName: name })
-      await setDoc(doc(db, 'users', credential.user.uid), {
-        name, email, role: 'unassigned', createdAt: serverTimestamp(),
-      })
+      const result = await api.post<AuthResponse>('/auth/register', { name, email, password })
+      setAccessToken(result.accessToken)
+      setUser(result.user)
+      setShop(null)
     },
     resetPassword: async (email) => {
-      await sendPasswordResetEmail(firebaseServices().auth, email)
+      await api.post('/auth/forgot-password', { email })
     },
     logout: async () => {
-      if (demo) { setUser(null); setShop(null); setDemo(false) }
-      else await signOut(firebaseServices().auth)
+      if (demo) {
+        setUser(null)
+        setShop(null)
+        setDemo(false)
+        return
+      }
+      try {
+        await api.post('/auth/logout')
+      } finally {
+        setAccessToken(null)
+        setUser(null)
+        setShop(null)
+      }
     },
     enterDemo: (role = 'owner') => {
+      setAccessToken(null)
       setDemo(true)
       setUser({ ...demoUser, role })
       setShop(demoShop)
@@ -95,31 +107,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     createShop: async (values) => {
       if (demo) return
-      const callable = httpsCallable<ShopFormValues, { shopId: string }>(firebaseServices().functions, 'createShop')
-      await callable(values)
-      if (user) await loadProfile(user.id)
+      await api.post('/shops', values)
+      await loadProfile()
     },
     updateShop: async (patch, shopId) => {
-      if (!shop) return
-      const targetId = shopId ?? shop.id
-      if (demo) { if (targetId === shop.id) setShop({ ...shop, ...patch }) }
-      else {
-        const adminFields = ['status', 'plan', 'subscriptionStatus', 'renewalDate']
-        const functionName = Object.keys(patch).some((key) => adminFields.includes(key)) ? 'updateShopAdmin' : 'updateShopProfile'
-        const callable = httpsCallable(firebaseServices().functions, functionName)
-        await callable({ shopId: targetId, ...patch })
-        if (targetId === shop.id) setShop({ ...shop, ...patch })
+      const targetId = shopId ?? shop?.id
+      if (!targetId) return
+      if (demo) {
+        if (shop && targetId === shop.id) setShop({ ...shop, ...patch })
+        return
       }
+      const updated = await api.patch<Shop>(`/shops/${targetId}`, patch)
+      if (shop && targetId === shop.id) setShop(updated)
     },
     updateAccount: async (name) => {
       if (!user) return
-      if (demo) setUser({ ...user, name })
-      else {
-        const { auth, db } = firebaseServices()
-        if (auth.currentUser) await updateProfile(auth.currentUser, { displayName: name })
-        await setDoc(doc(db, 'users', user.id), { name }, { merge: true })
+      if (demo) {
         setUser({ ...user, name })
+        return
       }
+      const result = await api.patch<{ user: UserProfile }>('/auth/me', { name })
+      setUser(result.user)
     },
   }
 

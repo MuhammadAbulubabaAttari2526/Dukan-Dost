@@ -14,7 +14,7 @@ import { FormError } from '@/components/Shared'
 export function ProductForm({ open, onOpenChange, product }: { open: boolean; onOpenChange: (open: boolean) => void; product?: Product }) {
   const { saveProduct, data } = useData()
   const [submitting, setSubmitting] = useState(false)
-  const form = useForm<z.input<typeof productSchema>, any, ProductFormValues>({ resolver: zodResolver(productSchema), defaultValues: { name: '', sku: '', category: '', unit: 'piece', cost: 0, price: 0, stock: 0, lowStockThreshold: 5, supplierId: '' } })
+  const form = useForm<z.input<typeof productSchema>, unknown, ProductFormValues>({ resolver: zodResolver(productSchema), defaultValues: { name: '', sku: '', category: '', unit: 'piece', cost: 0, price: 0, stock: 0, lowStockThreshold: 5, supplierId: '' } })
   useEffect(() => {
     if (open) form.reset(product ? { name: product.name, sku: product.sku, category: product.category, unit: product.unit, cost: product.cost, price: product.price, stock: product.stock, lowStockThreshold: product.lowStockThreshold, supplierId: product.supplierId ?? '' } : { name: '', sku: '', category: '', unit: 'piece', cost: 0, price: 0, stock: 0, lowStockThreshold: 5, supplierId: '' })
   }, [open, product, form])

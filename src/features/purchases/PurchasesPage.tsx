@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useFieldArray, useForm } from 'react-hook-form'
+import { useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Check, PackagePlus, Plus, Trash2, Truck } from 'lucide-react'
@@ -28,9 +28,9 @@ export default function PurchasesPage() {
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [confirmTarget, setConfirmTarget] = useState<Purchase | undefined>()
   const supplierForm = useForm<z.infer<typeof supplierSchema>>({ resolver: zodResolver(supplierSchema), defaultValues: { name: '', contact: '', phone: '' } })
-  const purchaseForm = useForm<z.input<typeof purchaseSchema>, any, PurchaseValues>({ resolver: zodResolver(purchaseSchema), defaultValues: { supplierId: '', invoiceNumber: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] } })
+  const purchaseForm = useForm<z.input<typeof purchaseSchema>, unknown, PurchaseValues>({ resolver: zodResolver(purchaseSchema), defaultValues: { supplierId: '', invoiceNumber: '', items: [{ productId: '', quantity: 1, unitCost: 0 }] } })
   const { fields, append, remove } = useFieldArray({ control: purchaseForm.control, name: 'items' })
-  const watchedItems = purchaseForm.watch('items')
+  const watchedItems = useWatch({ control: purchaseForm.control, name: 'items' })
   const total = watchedItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0)
 
   const submitSupplier = async (values: z.infer<typeof supplierSchema>) => {

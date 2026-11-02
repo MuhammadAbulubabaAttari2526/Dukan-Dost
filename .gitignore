@@ -14,11 +14,9 @@ dist-ssr
 .env
 .env.*
 !.env.example
-functions/lib
-firebase-debug.log
-firestore-debug.log
-service-account*.json
-*-service-account.json
+mongodb-data
+*.bson
+*.metadata.json
 coverage
 
 # Editor directories and files

@@ -17,7 +17,9 @@ export default function ReportsPage() {
   const [toDate, setToDate] = useState(toDateInput(new Date()))
   const from = period === 'custom' ? new Date(`${fromDate}T00:00:00+05:00`) : startOfPakistanDay(period === 'today' ? 0 : period === '7days' ? -6 : -29)
   const to = period === 'custom' ? new Date(`${toDate}T23:59:59+05:00`) : new Date()
-  const metrics = useMemo(() => metricsForRange(data, from, to), [data, from.getTime(), to.getTime()])
+  const fromTime = from.getTime()
+  const toTime = to.getTime()
+  const metrics = useMemo(() => metricsForRange(data, new Date(fromTime), new Date(toTime)), [data, fromTime, toTime])
   const productPerformance = useMemo(() => {
     const rows = new Map<string, { name: string; sku: string; quantity: number; sales: number; cogs: number }>()
     metrics.sales.forEach((sale) => sale.items.forEach((item) => {

@@ -1,15 +1,50 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { ArrowRight, PackageX, ShoppingBag } from 'lucide-react'
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  ArrowRight,
+  BarChart3,
+  Boxes,
+  Clock3,
+  FileText,
+  PackagePlus,
+  ShoppingCart,
+  TrendingUp,
+  UserRoundPlus,
+  UsersRound,
+  WalletCards,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useAuth } from '@/app/AuthContext'
 import { useData } from '@/app/DataContext'
-import { EmptyState, PageHeader, StatCard, StatusBadge } from '@/components/Shared'
+import { EmptyState } from '@/components/Shared'
 import { Button } from '@/components/ui/button'
-import { bestSelling, customerBalance, metricsForRange, startOfPakistanDay } from '@/utils/business'
+import { customerBalance, metricsForRange, startOfPakistanDay } from '@/utils/business'
 import { formatDate, pkr, toDateInput } from '@/utils/format'
+import './DashboardPage.css'
 
 type Range = 'today' | 'yesterday' | '7days' | '30days' | 'custom'
+type ActivityItem = {
+  id: string
+  title: string
+  detail: string
+  createdAt: string
+  href: string
+  icon: LucideIcon
+  tone: 'green' | 'pink'
+}
+
+const relativeTime = (value: string) => {
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime())
+  const minutes = Math.floor(elapsed / 60_000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hr${hours === 1 ? '' : 's'} ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
+  return formatDate(value)
+}
 
 export default function DashboardPage() {
   const { data } = useData()
@@ -26,35 +61,199 @@ export default function DashboardPage() {
     return { from, to }
   }, [range, customFrom, customTo])
   const metrics = useMemo(() => metricsForRange(data, from, to), [data, from, to])
-  const lowStock = data.products.filter((product) => !product.archived && product.stock <= product.lowStockThreshold)
+  const todayMetrics = useMemo(() => metricsForRange(data, startOfPakistanDay(), new Date()), [data])
+  const activeProducts = data.products.filter((product) => !product.archived)
+  const lowStock = activeProducts.filter((product) => product.stock <= product.lowStockThreshold)
+  const totalStock = activeProducts.reduce((sum, product) => sum + product.stock, 0)
   const outstanding = data.customers.reduce((sum, customer) => sum + Math.max(0, customerBalance(data, customer.id)), 0)
-  const best = bestSelling({ ...data, sales: metrics.sales })
+  const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'
   const chart = useMemo(() => Array.from({ length: 7 }).map((_, index) => {
     const day = startOfPakistanDay(index - 6)
     const next = startOfPakistanDay(index - 5)
-    const value = data.sales.filter((sale) => sale.status === 'completed' && new Date(sale.createdAt) >= day && new Date(sale.createdAt) < next).reduce((sum, sale) => sum + sale.total, 0)
-    return { day: new Intl.DateTimeFormat('en-PK', { weekday: 'short', timeZone: 'Asia/Karachi' }).format(day), sales: value }
+    const sales = data.sales
+      .filter((sale) => sale.status === 'completed' && new Date(sale.createdAt) >= day && new Date(sale.createdAt) < next)
+      .reduce((sum, sale) => sum + sale.total, 0)
+    return { day: new Intl.DateTimeFormat('en-PK', { weekday: 'short', timeZone: 'Asia/Karachi' }).format(day), sales }
   }), [data.sales])
-  const financialAccess = user?.role !== 'cashier'
+  const activities = useMemo<ActivityItem[]>(() => [
+    ...data.sales.filter((sale) => sale.status === 'completed').map((sale) => ({
+      id: `sale-${sale.id}`,
+      title: `New sale of ${pkr(sale.total)}`,
+      detail: sale.customerName ?? 'Walk-in customer',
+      createdAt: sale.createdAt,
+      href: '/sales',
+      icon: ShoppingCart,
+      tone: 'pink' as const,
+    })),
+    ...data.stockMovements.map((movement) => ({
+      id: `stock-${movement.id}`,
+      title: 'Stock updated',
+      detail: `${movement.productName} (${movement.quantity > 0 ? '+' : ''}${movement.quantity})`,
+      createdAt: movement.createdAt,
+      href: '/products',
+      icon: Boxes,
+      tone: 'green' as const,
+    })),
+    ...data.customers.map((customer) => ({
+      id: `customer-${customer.id}`,
+      title: 'New customer added',
+      detail: customer.name,
+      createdAt: customer.createdAt,
+      href: '/customers',
+      icon: UserRoundPlus,
+      tone: 'green' as const,
+    })),
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5), [data.customers, data.sales, data.stockMovements])
 
-  return <>
-    <PageHeader title={`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}, ${user?.name.split(' ')[0]}`} description={`Here’s what’s happening at ${shop?.name}. Values are calculated from your authorized shop records.`} action={<Link to="/pos"><Button><ShoppingBag />New sale</Button></Link>} />
-    <div className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border bg-card p-3"><div><label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="range">Reporting period</label><select id="range" className="h-9 rounded-md border bg-white px-3 text-sm" value={range} onChange={(event) => setRange(event.target.value as Range)}><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7days">Last 7 days</option><option value="30days">Last 30 days</option><option value="custom">Custom range</option></select></div>{range === 'custom' && <><div><label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="from">From</label><input id="from" type="date" className="h-9 rounded-md border bg-white px-3 text-sm" value={customFrom} max={customTo} onChange={(event) => setCustomFrom(event.target.value)} /></div><div><label className="mb-1 block text-xs font-medium text-slate-600" htmlFor="to">To</label><input id="to" type="date" className="h-9 rounded-md border bg-white px-3 text-sm" value={customTo} min={customFrom} onChange={(event) => setCustomTo(event.target.value)} /></div></>}<span className="ml-auto hidden text-xs text-slate-500 sm:block">Pakistan Standard Time</span></div>
-    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Business summary">
-      <StatCard label="Net sales" value={pkr(metrics.netSales)} note={`${metrics.transactions} completed transaction${metrics.transactions === 1 ? '' : 's'} · after discounts`} />
-      {financialAccess && <StatCard label="Cost of goods sold" value={pkr(metrics.cogs)} note="Using saved product cost snapshots" />}
-      {financialAccess && <StatCard label="Estimated gross profit" value={pkr(metrics.grossProfit)} note="Net sales minus cost of goods sold" tone="positive" />}
-      {financialAccess && <StatCard label="Recorded expenses" value={pkr(metrics.expenses)} note="Operating expenses only, not inventory purchases" />}
-      {financialAccess && <StatCard label="Estimated operating result" value={pkr(metrics.operatingResult)} note="Gross profit minus recorded expenses" tone={metrics.operatingResult >= 0 ? 'positive' : 'warning'} />}
-      <StatCard label="Outstanding udhar" value={pkr(outstanding)} note={`${data.customers.filter((customer) => customerBalance(data, customer.id) > 0).length} customers with a balance`} tone="warning" />
-    </section>
-    <section className="mt-6 grid gap-6 xl:grid-cols-[1.5fr_1fr]">
-      <div className="surface min-w-0"><div className="flex items-center justify-between px-5 py-4"><div><h2 className="font-semibold">Sales rhythm</h2><p className="text-xs text-slate-500">Completed net sales · last 7 days</p></div><Link to="/reports" className="text-sm font-medium text-blue-700 hover:underline">Full report</Link></div><div className="h-64 px-3 pb-4"><ResponsiveContainer width="100%" height="100%"><BarChart data={chart} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e2e8f0" /><XAxis dataKey="day" axisLine={false} tickLine={false} fontSize={12} /><YAxis axisLine={false} tickLine={false} fontSize={12} tickFormatter={(value) => `${Math.round(value / 1000)}k`} /><Tooltip formatter={(value) => pkr(Number(value))} cursor={{ fill: '#f1f5f9' }} /><Bar dataKey="sales" fill="#3b82f6" radius={[3, 3, 0, 0]} maxBarSize={34} /></BarChart></ResponsiveContainer></div></div>
-      <div className="surface"><div className="border-b px-5 py-4"><h2 className="font-semibold">Best-selling products</h2><p className="text-xs text-slate-500">By units sold in the selected period</p></div>{best.length ? <div className="divide-y">{best.map((item, index) => <div key={item.name} className="flex items-center gap-3 px-5 py-3"><span className="w-5 text-sm font-semibold text-slate-400">{index + 1}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{pkr(item.revenue)} sales value</p></div><span className="text-sm font-semibold tabular-nums">{item.quantity} units</span></div>)}</div> : <EmptyState title="No sales in this period" description="Completed sales will rank your best-selling products here." />}</div>
-    </section>
-    <section className="mt-6 grid gap-6 xl:grid-cols-[1.5fr_1fr]">
-      <div className="surface overflow-hidden"><div className="flex items-center justify-between px-5 py-4"><div><h2 className="font-semibold">Recent transactions</h2><p className="text-xs text-slate-500">Latest billing activity</p></div><Link to="/sales" className="flex items-center gap-1 text-sm font-medium text-blue-700 hover:underline">View all<ArrowRight className="size-4" /></Link></div><div className="overflow-x-auto"><table className="table-shell min-w-[560px]"><thead><tr><th>Receipt</th><th>Customer</th><th>Time</th><th>Payment</th><th className="text-right">Total</th></tr></thead><tbody>{data.sales.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6).map((sale) => <tr key={sale.id}><td className="font-medium">{sale.receiptNumber}<StatusBadge tone={sale.status === 'completed' ? 'green' : 'red'}>{sale.status}</StatusBadge></td><td>{sale.customerName ?? 'Walk-in customer'}</td><td className="text-slate-600">{formatDate(sale.createdAt, true)}</td><td className="capitalize">{sale.paymentMethod}</td><td className="text-right font-semibold tabular-nums">{pkr(sale.total)}</td></tr>)}</tbody></table></div></div>
-      <div className="surface"><div className="flex items-center justify-between border-b px-5 py-4"><div><h2 className="font-semibold">Stock attention</h2><p className="text-xs text-slate-500">At or below reorder threshold</p></div><PackageX className="size-5 text-amber-600" /></div>{lowStock.length ? <div className="divide-y">{lowStock.slice(0, 5).map((product) => <Link to="/products?filter=low-stock" key={product.id} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{product.name}</p><p className="text-xs text-slate-500">Reorder at {product.lowStockThreshold} {product.unit}</p></div><StatusBadge tone={product.stock === 0 ? 'red' : 'amber'}>{product.stock} left</StatusBadge></Link>)}</div> : <EmptyState title="Stock levels look good" description="No active product is below its low-stock threshold." />}</div>
-    </section>
-  </>
+  const stats: Array<{ label: string; value: string; note: string; icon: LucideIcon; tone: 'green' | 'pink' }> = [
+    { label: 'Total sales', value: pkr(metrics.netSales), note: `${metrics.transactions} completed bills in period`, icon: ShoppingCart, tone: 'green' },
+    { label: 'Total stock items', value: new Intl.NumberFormat('en-PK').format(totalStock), note: `${activeProducts.length} active products`, icon: Boxes, tone: 'pink' },
+    { label: 'Total customers', value: new Intl.NumberFormat('en-PK').format(data.customers.length), note: 'In your customer book', icon: UsersRound, tone: 'green' },
+    { label: "Today's bills", value: new Intl.NumberFormat('en-PK').format(todayMetrics.transactions), note: 'Completed sales today', icon: FileText, tone: 'pink' },
+  ]
+
+  const quickActions: Array<{ label: string; href: string; icon: LucideIcon; tone: 'green' | 'pink' }> = [
+    { label: 'New sale', href: '/pos', icon: ShoppingCart, tone: 'pink' },
+    { label: 'Add product', href: '/products?create=1', icon: PackagePlus, tone: 'green' },
+    { label: 'Customers & udhar', href: '/customers', icon: UsersRound, tone: 'green' },
+    { label: 'View reports', href: '/reports', icon: BarChart3, tone: 'pink' },
+  ]
+
+  return (
+    <div className="dashboard-page">
+      <header className="dashboard-welcome">
+        <div>
+          <p className="dashboard-eyebrow">Shop overview</p>
+          <h1>Good {greeting}, {user?.name.split(' ')[0]}!</h1>
+          <p className="dashboard-description">Here’s what’s happening at {shop?.name} today.</p>
+        </div>
+        <div className="dashboard-welcome-actions">
+          <span className="dashboard-credit">Outstanding udhar <strong>{pkr(outstanding)}</strong></span>
+          <Link to="/pos"><Button className="dashboard-new-sale"><ShoppingCart />New Sale<ArrowRight /></Button></Link>
+        </div>
+      </header>
+
+      <section className="dashboard-stats" aria-label="Business summary">
+        {stats.map((stat) => {
+          const Icon = stat.icon
+          return (
+            <article className="dashboard-stat surface" key={stat.label}>
+              <span className={`dashboard-stat-icon ${stat.tone}`}><Icon /></span>
+              <div className="dashboard-stat-copy">
+                <p>{stat.label}</p>
+                <strong>{stat.value}</strong>
+                <span>{stat.note}</span>
+              </div>
+              <span className={`dashboard-stat-accent ${stat.tone}`} aria-hidden="true" />
+            </article>
+          )
+        })}
+      </section>
+
+      <section className="dashboard-panels" aria-label="Sales and business activity">
+        <article className="dashboard-panel dashboard-sales surface">
+          <div className="dashboard-panel-heading">
+            <div className="dashboard-title-with-icon">
+              <span className="dashboard-heading-icon"><TrendingUp /></span>
+              <div>
+                <h2>Sales overview</h2>
+                <p>Completed sales · last 7 days</p>
+              </div>
+            </div>
+            <div className="dashboard-periods">
+              <label className="sr-only" htmlFor="range">Reporting period</label>
+              <select id="range" value={range} onChange={(event) => setRange(event.target.value as Range)}>
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="7days">This week</option>
+                <option value="30days">This month</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+          </div>
+          {range === 'custom' && (
+            <div className="dashboard-custom-range">
+              <label>From <input aria-label="From date" type="date" value={customFrom} max={customTo} onChange={(event) => setCustomFrom(event.target.value)} /></label>
+              <label>To <input aria-label="To date" type="date" value={customTo} min={customFrom} onChange={(event) => setCustomTo(event.target.value)} /></label>
+            </div>
+          )}
+          <div className="dashboard-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chart} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="sales-area-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#315C4C" stopOpacity={0.2} />
+                    <stop offset="100%" stopColor="#315C4C" stopOpacity={0.015} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="#E8DFD3" />
+                <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: '#78847B', fontSize: 12 }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#78847B', fontSize: 11 }} tickFormatter={(value) => `${Math.round(value / 1000)}k`} />
+                <Tooltip formatter={(value) => pkr(Number(value))} contentStyle={{ borderRadius: 12, borderColor: '#E8DFD3', background: '#FFFDF9' }} />
+                <Area type="monotone" dataKey="sales" stroke="#315C4C" strokeWidth={2.5} fill="url(#sales-area-fill)" activeDot={{ r: 5, fill: '#315C4C', stroke: '#FFF7E8', strokeWidth: 3 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="dashboard-sales-summary">
+            <span>Selected period</span>
+            <strong>{pkr(metrics.netSales)}</strong>
+            <span>Net sales</span>
+          </div>
+        </article>
+
+        <article className="dashboard-panel dashboard-quick surface">
+          <div className="dashboard-panel-heading">
+            <div className="dashboard-title-with-icon">
+              <span className="dashboard-heading-icon pink"><WalletCards /></span>
+              <div><h2>Quick actions</h2><p>Shortcuts for your shop</p></div>
+            </div>
+          </div>
+          <div className="dashboard-quick-grid">
+            {quickActions.map((action) => {
+              const Icon = action.icon
+              return <Link key={action.label} to={action.href} className="dashboard-quick-action">
+                <span className={`dashboard-action-icon ${action.tone}`}><Icon /></span>
+                <span>{action.label}</span>
+              </Link>
+            })}
+          </div>
+        </article>
+
+        <article className="dashboard-panel dashboard-activity surface">
+          <div className="dashboard-panel-heading">
+            <div className="dashboard-title-with-icon">
+              <span className="dashboard-heading-icon"><Clock3 /></span>
+              <div><h2>Recent activity</h2><p>Latest updates from your shop</p></div>
+            </div>
+            <Link to="/sales" className="dashboard-view-all">View all<ArrowRight /></Link>
+          </div>
+          {activities.length ? (
+            <div className="dashboard-activity-list">
+              {activities.map((activity) => {
+                const Icon = activity.icon
+                return <Link to={activity.href} className="dashboard-activity-item" key={activity.id}>
+                  <span className="dashboard-activity-marker" />
+                  <span className={`dashboard-activity-icon ${activity.tone}`}><Icon /></span>
+                  <span className="dashboard-activity-copy">
+                    <strong>{activity.title}</strong>
+                    <span>{activity.detail}</span>
+                    <time dateTime={activity.createdAt}>{relativeTime(activity.createdAt)}</time>
+                  </span>
+                </Link>
+              })}
+            </div>
+          ) : <EmptyState title="No activity yet" description="Sales, stock changes and new customers will show up here." />}
+        </article>
+      </section>
+
+      <Link to="/products?filter=low-stock" className="dashboard-stock-banner">
+        <span className="dashboard-stock-icon"><Boxes /></span>
+        <span className="dashboard-stock-copy">
+          <strong>{lowStock.length ? 'Stock needs attention' : 'Your stock looks healthy'}</strong>
+          <span>{lowStock.length ? `${lowStock.length} product${lowStock.length === 1 ? '' : 's'} at or below reorder level.` : 'No products are below their reorder level.'}</span>
+        </span>
+        <span className="dashboard-stock-link">{lowStock.length ? 'Review stock' : 'View products'}<ArrowRight /></span>
+      </Link>
+    </div>
+  )
 }

@@ -1,112 +1,49 @@
-# Database schema and transaction design
+# MongoDB schema and accounting boundaries
 
-All monetary values are numeric PKR amounts, rounded to two decimals by trusted business logic. Quantities are integers. Trusted timestamps use Firestore server timestamps and are normalized to ISO strings at the client boundary. The UI formats them for `Asia/Karachi`.
+## Storage conventions
 
-## Top-level collections
+- Every shop-owned business record stores `shopId: ObjectId`; tenant-scoped reads and writes must include the authenticated, membership-validated shop id.
+- Monetary values are integer paisa fields ending in `Paisa`. API serialization converts them to decimal PKR numbers for the existing UI. Convert input amounts with `toPaisa`; do not store floating-point currency.
+- Counts and inventory quantities are integers. Dates are stored as BSON dates and displayed in Asia/Karachi time.
+- MongoDB transactions require a replica set. The local Docker Compose file initializes `rs0`.
 
-### `users/{userId}`
+## Collections
 
-Required: `name: string`, `email: string`, `role: unassigned|owner|manager|cashier|super_admin`, `createdAt: timestamp`. Optional: `shopId: string`, `updatedAt: timestamp`.
+| Collection | Key data and purpose |
+|---|---|
+| `users` | Email-unique identity, Argon2id password hash, disabled state, super-admin flag and `tokenVersion` |
+| `memberships` | Shop/user/role and active state; partial unique index prevents one user having multiple active shops |
+| `shops` | Profile, active/suspended state, plan, subscription status and renewal date |
+| `products` | Shop-local SKU, price/cost in paisa, stock, archive state and low-stock threshold |
+| `sales` | Receipt counter, immutable item snapshots, total/discount/payment and cashier |
+| `returns` | Return lines, refund amount and reference to original sale |
+| `customers` | Shop-local customer information |
+| `ledgerEntries` | Signed customer balance events; positive is amount owed, negative is payment/credit |
+| `payments` | Sale receipt, customer payment, refund and supplier payment records |
+| `suppliers` | Shop-local supplier contact record |
+| `purchases` | Supplier invoice, item snapshots, paid amount and draft/confirmed state |
+| `supplierLedger` | Purchase payable and supplier payment entries |
+| `expenses` | Operating expense records, separate from inventory purchases |
+| `stockMovements` | Signed stock changes and their reason/reference |
+| `subscriptions` | Append-only plan/status history for a shop |
+| `idempotencyKeys` | Shop-scoped request hash and stored response; TTL expiry is 30 days |
+| `auditLogs`, `adminAuditLogs`, `authAuditLogs` | Shop, privileged-admin and authentication activity |
+| `refreshTokens` | Hashed refresh credential, CSRF-token hash, session family and revocation state |
+| `passwordResetTokens` | Hashed, expiring, single-use reset token |
 
-Ownership: the authenticated user can read their profile and update only `name`/`updatedAt`. Public creation is valid only for their own UID with `role=unassigned` and no `shopId`. Membership changes are performed by functions.
-
-### `shops/{shopId}`
-
-Required: `name`, `contact`, `address`, `status: active|suspended`, `plan: starter|business`, `subscriptionStatus: trial|active|past_due|expired|cancelled`, `renewalDate: timestamp`, `createdAt: timestamp`. Optional: `logoUrl`, `ownerId`, `updatedAt`.
-
-Ownership: shop members read; functions write. Super-admin reads require the Auth custom claim.
-
-### `rateLimits/{uid_action}`
-
-Internal fixed-window abuse counters: `window: number`, `count: number`, `updatedAt`. Client rules deny access.
-
-## Shop-scoped collections
-
-Every document below lives under `shops/{shopId}` and is readable only by a member of that shop or an explicitly claimed super-admin. Client writes are denied; trusted functions use the Admin SDK.
-
-### `members/{userId}`
-
-`role: owner|manager|cashier`, `email: string`, `joinedAt: timestamp`. Membership is the tenant boundary. Owner onboarding and `assignMember` are the only role-assignment paths.
-
-### `products/{productId}`
-
-Required: `name`, `sku`, `category`, `unit`, `cost: number`, `price: number`, `stock: integer`, `lowStockThreshold: integer`, `archived: boolean`, `createdAt`, `updatedAt`. Optional: `supplierId`.
-
-Validation: bounded non-empty strings, nonnegative finite money and stock, unique SKU per shop. Product edits preserve current stock; quantity changes require movements. Archived products remain available for historical snapshots but not POS.
-
-### `sales/{saleId}`
-
-Required: `receiptNumber`, `items: SaleItem[]`, `subtotal`, `discount`, `total`, `amountPaid`, `balanceDue`, `paymentMethod: cash|digital|credit`, `status: completed|returned|cancelled`, `createdAt`, `createdBy`, `idempotencyKey`. Optional nullable: `customerId`, `customerName`, `returnedAt`, `returnedBy`.
-
-`SaleItem`: `id`, `productId`, `name`, `sku`, `unit`, `unitPrice`, `cost`, `quantity`. Price, cost, name and SKU are authoritative product snapshots.
-
-**Schema reasoning:** items are a bounded array (1–100 lines) on the sale rather than a separate subcollection. This keeps receipt reads and the sale/stock transaction atomic and avoids eventual consistency between a sale and its items. The 100-line server limit also bounds document size. Completed sales are never silently edited; a full return updates status and adds reversal records.
-
-### `payments/{paymentId}`
-
-`customerId?: string`, `saleId?: string`, `amount: positive number`, `method: cash|digital`, `type: sale|credit_payment|refund`, `idempotencyKey`, `createdAt`. Refunds use deterministic IDs derived from the sale to prevent repetition.
-
-### `customers/{customerId}`
-
-`name`, optional `phone`, `createdAt`. No arbitrary balance field is stored.
-
-### `ledger/{entryId}`
-
-`customerId`, `type: credit_sale|payment|return|adjustment`, signed `amount`, optional `referenceId`, `note`, `createdAt`. Debits are positive and credits negative. Outstanding balance is `sum(amount)` across the customer ledger.
-
-### `suppliers/{supplierId}`
-
-`name`, `contact`, `phone`, `createdAt`. Supplier payable balances are not implied.
-
-### `purchases/{purchaseId}`
-
-`supplierId`, `supplierName`, `invoiceNumber`, `items: PurchaseItem[]`, `total`, `status: draft|confirmed|cancelled`, `paymentStatus: unpaid|partial|paid`, `createdAt`, optional `confirmedAt` and `confirmedBy`.
-
-`PurchaseItem`: `productId`, `name`, `quantity`, `unitCost`. Authorized invoice costs are validated and totals recalculated server-side. Only `draft → confirmed` triggers stock-in.
-
-### `expenses/{expenseId}`
-
-`title`, `category`, `amount`, `date: YYYY-MM-DD`, `paymentMethod: cash|digital`, optional `note`, `createdAt`. Inventory purchases must not be duplicated here.
-
-### `stockMovements/{movementId}`
-
-`productId`, `productName`, `type: opening|purchase|sale|adjustment|return`, signed integer `quantity`, `reason`, optional `referenceId`, `createdAt`. Every quantity mutation has a corresponding movement in the same transaction/batch.
-
-### `requests/{idempotencyKey}`
-
-`operation: sale|customer_payment`, `saleId` or `paymentId`, `createdAt`. The request record and business records commit atomically. A repeated key returns the original result or no-ops without duplicate stock/payment effects.
-
-### `subscriptions/{subscriptionId}`
-
-`plan`, `status`, `startDate`, `renewalDate`, `note`. New administrative plan/status changes append a record; shop subscription fields are the current projection.
-
-### `auditLogs/{logId}`
-
-`action`, `actor`, `detail`, `createdAt`. Sensitive operations and privileged admin actions append audit entries.
-
-## Indexes
-
-`firestore.indexes.json` defines indexes for product SKU/archive, sales status/date, supplier invoice uniqueness checks, purchase status/date, customer ledger date, product movement date and expense date. Single-field queries use Firestore’s automatic indexes. The browser currently reads bounded collections and paginates locally; production scale should move to cursor queries (see limitations).
-
-## Referential integrity
-
-Firestore does not enforce relational constraints. Functions therefore:
-
-- re-fetch shop membership and shop status before writes;
-- re-fetch products, customers, suppliers and purchases inside transactions;
-- reject cross-shop references because all document paths are derived from the authorized `shopId`;
-- preserve historical sale snapshots if product prices later change;
-- archive products instead of deleting records referenced by sales.
+Product and sale line snapshots preserve historical names, SKU, price and cost when catalog values later change. Sale item counts and import batches are bounded. Unique indexes enforce per-shop SKU, receipt, purchase invoice and idempotency key constraints.
 
 ## Transaction boundaries
 
-- **Sale:** request key + products + customer read; sale, stock updates, movements, payment, ledger, request and audit commit atomically.
-- **Customer payment:** request key + customer + ledger read; payment, ledger credit, request and audit commit atomically.
-- **Purchase confirmation:** purchase + products read; status, stock/cost, movements and audit commit atomically.
-- **Return:** sale + products read; status, restocking, movements, ledger/refund and audit commit atomically.
-- **Product save/adjustment:** product/SKU reads; product, movement and audit commit atomically.
-- **CSV import:** maximum 100 products per batch; all rows validated before a single batch commit.
+Transactions are used for sale and return operations, stock adjustments, product imports, purchase confirmation and account/shop creation. Related stock movement, customer/supplier ledger, payment and audit entries are written in the same transaction where applicable. All database queries that touch shop data must include `shopId`.
 
-## Retention and deletion
+## Accounting interpretation
 
-MVP policy: retain business records while the shop account is active and after subscription expiry. No hard-delete UI is provided for sales, stock movements, payments, credit ledger or audit logs. Product archival preserves history. Account/shop deletion and retention schedules require an explicit owner request, a super-admin-reviewed runbook, legal review, export confirmation, and a tested deletion job before being enabled. Demo session data disappears on reload and is not cloud retention.
+- Customer balance is calculated from ledger entries; it is not an independently editable customer field.
+- Purchase confirmation increases stock and records supplier payable. Supplier payment reduces that payable.
+- Operating expenses exclude inventory purchases to prevent double counting.
+- Reports are operational estimates. They do not model tax, accounting period close, inventory write-offs or all return-period accounting policies.
+
+## Index management
+
+Run `npm run api:indexes` after setting up the API environment. Index creation is idempotent. Review index changes for existing production data before deployment; unique indexes can fail if historical records violate the constraint.

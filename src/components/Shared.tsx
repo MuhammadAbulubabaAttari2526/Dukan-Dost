@@ -28,7 +28,7 @@ export function LoadingPage() {
 }
 
 export function FullScreenLoader() {
-  return <div className="flex min-h-dvh items-center justify-center bg-slate-950 text-white"><LoaderCircle className="mr-3 animate-spin" /><span>Opening your workspace…</span></div>
+  return <div className="flex min-h-dvh items-center justify-center bg-background text-foreground"><LoaderCircle className="mr-3 animate-spin text-primary" /><span>Opening your workspace…</span></div>
 }
 
 export function StatusBadge({ children, tone = 'slate' }: { children: ReactNode; tone?: 'slate' | 'green' | 'amber' | 'red' | 'blue' }) {

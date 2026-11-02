@@ -20,7 +20,7 @@ import { ProductForm } from './ProductForm'
 export default function ProductsPage() {
   const { data, adjustStock, archiveProduct, importProducts } = useData()
   const [params, setParams] = useSearchParams()
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(params.get('search') ?? '')
   const [category, setCategory] = useState('all')
   const [filter, setFilter] = useState(params.get('filter') ?? 'active')
   const [page, setPage] = useState(1)
@@ -30,7 +30,7 @@ export default function ProductsPage() {
   const [historyProduct, setHistoryProduct] = useState<Product | undefined>()
   const [archiveTarget, setArchiveTarget] = useState<Product | undefined>()
   const fileRef = useRef<HTMLInputElement>(null)
-  const adjustment = useForm<z.input<typeof adjustmentSchema>, any, z.output<typeof adjustmentSchema>>({ resolver: zodResolver(adjustmentSchema), defaultValues: { quantity: 1, reason: '' } })
+  const adjustment = useForm<z.input<typeof adjustmentSchema>, unknown, z.output<typeof adjustmentSchema>>({ resolver: zodResolver(adjustmentSchema), defaultValues: { quantity: 1, reason: '' } })
   const categories = [...new Set(data.products.map((product) => product.category))].sort()
   const filtered = data.products.filter((product) => {
     const matchesSearch = `${product.name} ${product.sku}`.toLowerCase().includes(search.toLowerCase())
@@ -41,7 +41,19 @@ export default function ProductsPage() {
   const pages = Math.max(1, Math.ceil(filtered.length / 8))
   const visible = filtered.slice((page - 1) * 8, page * 8)
   useEffect(() => { setPage(1) }, [search, category, filter])
-  useEffect(() => { if (params.get('filter') === 'low-stock') setFilter('low-stock') }, [params])
+  useEffect(() => {
+    setSearch(params.get('search') ?? '')
+    if (params.get('filter') === 'low-stock') setFilter('low-stock')
+    if (params.get('create') === '1') {
+      setSelected(undefined)
+      setFormOpen(true)
+      setParams((current) => {
+        const next = new URLSearchParams(current)
+        next.delete('create')
+        return next
+      }, { replace: true })
+    }
+  }, [params, setParams])
 
   const submitAdjustment = async (values: z.infer<typeof adjustmentSchema>) => {
     if (!adjustmentProduct) return

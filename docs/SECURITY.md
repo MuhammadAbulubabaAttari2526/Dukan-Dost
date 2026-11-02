@@ -1,73 +1,35 @@
-# Security, access and recovery model
+# Security and recovery
 
-## Authorization layers
+## Authentication and authorization
 
-1. Firebase Authentication establishes the UID.
-2. `shops/{shopId}/members/{uid}` establishes tenant membership and business role.
-3. Callable functions re-check membership and allowed role on every privileged operation.
-4. Shop status, subscription state and renewal date gate business writes.
-5. Firestore rules allow shop reads only to members/claimed super-admins and deny all direct business writes.
-6. Super-admin functions additionally require the Firebase Auth custom claim `superAdmin=true`.
+- Accounts use Argon2id password hashes and short-lived bearer access tokens. Refresh credentials are opaque, HttpOnly cookies; refresh rotation uses a separate CSRF cookie/header check.
+- Refresh tokens are stored as hashes. Access tokens carry a session family id and a user token version; revoking a session or changing a password invalidates the associated access token on the next request.
+- Shop membership and role are checked server-side on every tenant route. All shop queries are scoped to the validated `shopId`; the frontend route guards are UX only.
+- Super-admin endpoints require a provisioned database flag and do not accept tenant routes. Provision with `npm run create-super-admin` from an authorized environment and audit every administrative mutation.
+- Public registration cannot specify a role or shop membership.
 
-Frontend route guards and hidden actions are usability controls only, not the security boundary. Public sign-up creates `unassigned` users. Shop creation assigns owner only to the authenticated creator during onboarding. Owners can assign manager/cashier to existing users; there is no public super-admin route.
+## Business integrity controls
 
-## Data and secrets
+- Zod request validation, bounded lists, CORS allow-list, Helmet, authentication rate limiting and structured Pino logs.
+- Server-calculated price, cost, totals, discount limits and inventory availability.
+- Mongo transactions for core inventory/accounting mutations and shop-scoped idempotency for sale, return and payment operations.
+- Shop suspension and subscription expiry block business writes; records remain retained.
+- Data export is authenticated and limited to the currently loaded UI records; it is not a complete database backup.
 
-Only public Firebase Web configuration belongs in `VITE_FIREBASE_*`. Admin SDK credentials must remain in trusted local/CI secret storage. Do not commit `.env`, service-account files, tokens, database exports or customer data. Cloud Functions return safe validation/business errors and do not expose Admin credentials.
+## Secrets and deployment
 
-## Transaction and abuse controls
+Keep MongoDB credentials and JWT secrets in an approved secret manager or protected environment file. Production must use explicit high-entropy JWT secrets and secure cookies. Use HTTPS, configure `CORS_ORIGINS` to exact trusted origins, restrict database network access, and run MongoDB with authentication and TLS in a managed production deployment. Never commit `.env`, reset tokens, customer data or database exports.
 
-- Authoritative product price/cost snapshots and server-recalculated totals
-- Role-based discount ceilings: cashier 5%, manager 20%, owner full order value
-- Nonnegative stock policy
-- Idempotency records for sale and customer-payment requests
-- Exactly-once draft purchase confirmation and full-sale return state transitions
-- Per-UID fixed-window Firestore rate counters (stricter for onboarding/admin/import)
-- Bounded strings, item counts, CSV size (100 rows), money and quantities
-- Audit records for sensitive operations
-- Explicitly authorized JSON/CSV export screens; Firestore cross-shop reads denied
+The development password-reset path logs the reset token to the API logger (with token redaction configured). No production email transport is included yet, so password-reset delivery must be implemented and verified before production onboarding.
 
-For a public deployment, add Firebase App Check after validating your reCAPTCHA/provider configuration, monitor rate-limit rejection logs, and configure budget alerts. App Check is not falsely shown as enabled here.
+## Backup and restore
 
-## Expiry and suspension policy
+Use MongoDB's managed backup or an authorized `mongodump`/`mongorestore` process with encrypted, access-controlled storage, retention policy and monitoring. Exclude credentials from the backup artifact. A backup is not proven until restored into an isolated replica set and checked for shop, sale, stock, payment, ledger and audit consistency. No production backup or restore drill has been run for this project.
 
-Expired, cancelled, past-due and suspended shops cannot perform business writes. Their Firestore records are preserved and remain readable by authorized members. Owners retain profile, subscription and data-export access. A super admin can reactivate access or manually record a subscription renewal; no payment success is inferred by the UI.
+## Pre-production gates
 
-## Backup procedure
-
-Use Google Cloud’s managed Firestore export rather than exporting Admin credentials to the browser.
-
-1. Create a dedicated, access-controlled Cloud Storage bucket in a compatible region with retention/object-lock policies appropriate to the business.
-2. Schedule Firestore managed exports with Cloud Scheduler and a least-privilege service account. Include all collections; do not rely on client JSON exports as backups.
-3. Encrypt bucket access, restrict public access, enable audit logging, and define a retention schedule with legal/accounting requirements.
-4. Monitor export success and alert on failures. Test the scheduler initially and after permission changes.
-5. Document the project, bucket, export prefix, schedule and recovery owner in the deployment runbook, not in source control.
-
-Example command shape (run only with authorized gcloud credentials and your own values):
-
-```bash
-gcloud firestore export gs://YOUR_PRIVATE_BACKUP_BUCKET/YYYY-MM-DD \
-  --project=YOUR_PROJECT_ID
-```
-
-## Restore drill
-
-Run before a pilot and at least quarterly:
-
-1. Export production to a new timestamped prefix.
-2. Create an isolated non-production Firebase/GCP project. Never overwrite production during a drill.
-3. Import the export into the isolated project using Firestore managed import.
-4. Deploy the same rules/functions revision to the isolated project.
-5. Verify record counts for shops, products, sales, payments, ledger, purchases and movements; reconcile sale totals, stock movements and customer ledger balances against a sampled pre-backup report.
-6. Verify tenant A cannot read tenant B and that callable sale/payment idempotency works in the restored environment.
-7. Record evidence, discrepancies, recovery time and the person who approved the drill.
-
-A live cloud backup/restore drill was not run in this repository because no Firebase project or credentials were supplied. Do not claim recovery readiness until this drill passes.
-
-## Pre-pilot security gates
-
-- Run `npm test` and emulator integration suites with zero failures.
-- Test role escalation, cross-shop reads/writes and expired-subscription writes against the deployed project.
-- Review IAM, custom claims, API-key restrictions, App Check, Logging and budget alerts.
-- Complete the backup restore drill and manual QA checklist.
-- Treat the operational reports as estimates, not tax-compliant accounts.
+- Run all unit and replica-set integration tests and complete the manual QA checklist.
+- Review CORS, proxy, cookie, rate-limit, logging, secret and database network settings.
+- Implement and exercise production password-reset email delivery.
+- Run a restore drill and reconcile a sample shop's sales, stock and ledgers.
+- Perform an independent security review and resolve its findings before storing real customer data.

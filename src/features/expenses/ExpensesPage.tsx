@@ -17,7 +17,7 @@ export default function ExpensesPage() {
   const { data, addExpense } = useData()
   const [open, setOpen] = useState(false)
   const [period, setPeriod] = useState('month')
-  const form = useForm<z.input<typeof expenseSchema>, any, z.output<typeof expenseSchema>>({ resolver: zodResolver(expenseSchema), defaultValues: { title: '', category: '', amount: 0, date: toDateInput(new Date()), paymentMethod: 'cash', note: '' } })
+  const form = useForm<z.input<typeof expenseSchema>, unknown, z.output<typeof expenseSchema>>({ resolver: zodResolver(expenseSchema), defaultValues: { title: '', category: '', amount: 0, date: toDateInput(new Date()), paymentMethod: 'cash', note: '' } })
   const filtered = useMemo(() => {
     const now = new Date()
     return data.expenses.filter((expense) => {

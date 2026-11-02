@@ -1,9 +1,8 @@
-/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { collection, limit, onSnapshot, query } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { useAuth } from '@/app/AuthContext'
-import { firebaseServices } from '@/lib/firebase'
 import { createDemoData } from '@/services/demoData'
 import { confirmDemoPurchase, createDemoSale, recordDemoPayment, returnDemoSale } from '@/services/demoOperations'
 import type { Customer, Expense, Product, ProductInput, Sale, SaleInput, ShopData, Supplier } from '@/types'
@@ -30,55 +29,38 @@ interface DataContextValue {
 
 const DataContext = createContext<DataContextValue | null>(null)
 const emptyData: ShopData = { products: [], sales: [], customers: [], ledger: [], payments: [], suppliers: [], purchases: [], expenses: [], stockMovements: [], auditLogs: [], subscriptions: [] }
-const collections = ['products', 'sales', 'customers', 'ledger', 'payments', 'suppliers', 'purchases', 'expenses', 'stockMovements', 'auditLogs', 'subscriptions'] as const
-
-function normalizeDocument(document: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(document).map(([key, value]) => {
-    if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') return [key, value.toDate().toISOString()]
-    return [key, value]
-  }))
-}
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const { user, shop, demo } = useAuth()
+  const queryClient = useQueryClient()
+  const [demoData, setDemoData] = useState(createDemoData)
   const shopId = shop?.id
-  const userId = user?.id
-  const [data, setData] = useState<ShopData>(demo ? createDemoData() : emptyData)
-  const [loading, setLoading] = useState(!demo)
+  const dataQuery = useQuery({
+    queryKey: ['shop-data', shopId, user?.id],
+    queryFn: () => api.get<Partial<ShopData>>(`/shops/${shopId}/bootstrap?limit=100`),
+    enabled: !demo && Boolean(shopId && user),
+    staleTime: 15_000,
+  })
+  const data: ShopData = demo ? demoData : { ...emptyData, ...(dataQuery.data ?? {}) }
+  const loading = demo ? false : dataQuery.isLoading
 
-  useEffect(() => {
-    if (demo) { setData(createDemoData()); setLoading(false); return }
-    if (!shopId || !userId) { setData(emptyData); setLoading(false); return }
-    setLoading(true)
-    const { db } = firebaseServices()
-    let active = true
-    const unsubscribers = collections.map((name) => onSnapshot(
-      query(collection(db, 'shops', shopId, name), limit(500)),
-      (snapshot) => {
-        if (!active) return
-        setData((current) => ({ ...current, [name]: snapshot.docs.map((item) => ({ id: item.id, ...normalizeDocument(item.data()) })) }))
-        setLoading(false)
-      },
-      (error) => { console.error(error); toast.error(`Could not load ${name}`); setLoading(false) },
-    ))
-    return () => { active = false; unsubscribers.forEach((unsubscribe) => unsubscribe()) }
-  }, [demo, shopId, userId])
-
-  const call = async <T,>(name: string, payload: unknown): Promise<T> => {
-    const callable = httpsCallable<unknown, T>(firebaseServices().functions, name)
-    const result = await callable(payload)
-    return result.data
+  const invalidate = async () => {
+    if (shopId) await queryClient.invalidateQueries({ queryKey: ['shop-data', shopId] })
   }
-
+  const requireShopPath = () => {
+    if (!shopId) throw new Error('A shop workspace is required for this operation')
+    return `/shops/${shopId}`
+  }
   const audit = (action: string, detail: string) => ({
     id: uid('audit'), action, actor: user?.name ?? 'Demo user', detail, createdAt: new Date().toISOString(),
   })
 
   const actions: DataContextValue = {
-    data, loading,
+    data,
+    loading,
     saveProduct: async (input, id) => {
       if (demo) {
-        setData((current) => {
+        setDemoData((current) => {
           if (current.products.some((product) => product.sku.toLowerCase() === input.sku.toLowerCase() && product.id !== id)) throw new Error('This SKU already exists')
           const now = new Date().toISOString()
           if (id) {
@@ -90,7 +72,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
         })
         return
       }
-      await call('saveProduct', { shopId: shop?.id, input, id })
+      const path = `${requireShopPath()}/products${id ? `/${id}` : ''}`
+      if (id) {
+        const patch = {
+          name: input.name,
+          sku: input.sku,
+          category: input.category,
+          unit: input.unit,
+          cost: input.cost,
+          price: input.price,
+          lowStockThreshold: input.lowStockThreshold,
+          supplierId: input.supplierId,
+        }
+        await api.patch(path, patch)
+      } else {
+        await api.post(path, input)
+      }
+      await invalidate()
     },
     importProducts: async (rows) => {
       if (!rows.length) throw new Error('No valid products to import')
@@ -98,18 +96,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
         for (const row of rows) await actions.saveProduct(row)
         return
       }
-      await call('importProducts', { shopId: shop?.id, rows })
+      await api.post(`${requireShopPath()}/products/import`, { rows })
+      await invalidate()
     },
     archiveProduct: async (id) => {
       if (demo) {
-        setData((current) => ({ ...current, products: current.products.map((product) => product.id === id ? { ...product, archived: true, updatedAt: new Date().toISOString() } : product), auditLogs: [audit('product.archived', `Archived product ${id}`), ...current.auditLogs] }))
+        setDemoData((current) => ({ ...current, products: current.products.map((product) => product.id === id ? { ...product, archived: true, updatedAt: new Date().toISOString() } : product), auditLogs: [audit('product.archived', `Archived product ${id}`), ...current.auditLogs] }))
         return
       }
-      await call('archiveProduct', { shopId: shop?.id, id })
+      await api.post(`${requireShopPath()}/products/${id}/archive`)
+      await invalidate()
     },
     adjustStock: async (id, quantity, reason) => {
       if (demo) {
-        setData((current) => {
+        setDemoData((current) => {
           const product = current.products.find((item) => item.id === id)
           if (!product) throw new Error('Product not found')
           if (product.stock + quantity < 0) throw new Error('Stock cannot become negative')
@@ -118,33 +118,59 @@ export function DataProvider({ children }: { children: ReactNode }) {
         })
         return
       }
-      await call('adjustStock', { shopId: shop?.id, id, quantity, reason })
+      await api.post(`${requireShopPath()}/products/${id}/adjustments`, { quantity, reason })
+      await invalidate()
     },
     createSale: async (input) => {
-      if (!demo) return call<Sale>('createSale', { ...input, shopId: shop?.id })
+      if (!demo) {
+        const { idempotencyKey, ...body } = input
+        const result = await api.post<Sale>(`${requireShopPath()}/sales`, body, { idempotencyKey })
+        await invalidate()
+        return result
+      }
       const result = createDemoSale(data, input, user?.role ?? 'cashier', user?.name ?? 'Demo user')
-      setData(result.data)
+      setDemoData(result.data)
       return result.sale
     },
     returnSale: async (id) => {
-      if (!demo) { await call('returnSale', { shopId: shop?.id, id }); return }
-      setData((current) => returnDemoSale(current, id, user?.name ?? 'Demo user'))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/sales/${id}/returns`, { reason: 'Full sale return', refundMethod: 'cash' }, { idempotencyKey: uid('return') })
+        await invalidate()
+        return
+      }
+      setDemoData((current) => returnDemoSale(current, id, user?.name ?? 'Demo user'))
     },
     addCustomer: async (input) => {
-      if (!demo) { await call('addCustomer', { shopId: shop?.id, input }); return }
-      setData((current) => ({ ...current, customers: [{ ...input, id: uid('cust'), createdAt: new Date().toISOString() }, ...current.customers] }))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/customers`, input)
+        await invalidate()
+        return
+      }
+      setDemoData((current) => ({ ...current, customers: [{ ...input, id: uid('cust'), createdAt: new Date().toISOString() }, ...current.customers] }))
     },
     recordPayment: async (customerId, amount, method, key) => {
-      if (!demo) { await call('recordCustomerPayment', { shopId: shop?.id, customerId, amount, method, idempotencyKey: key }); return }
-      setData((current) => recordDemoPayment(current, customerId, amount, method, key, user?.name ?? 'Demo user'))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/customers/${customerId}/payments`, { amount, method }, { idempotencyKey: key })
+        await invalidate()
+        return
+      }
+      setDemoData((current) => recordDemoPayment(current, customerId, amount, method, key, user?.name ?? 'Demo user'))
     },
     addSupplier: async (input) => {
-      if (!demo) { await call('addSupplier', { shopId: shop?.id, input }); return }
-      setData((current) => ({ ...current, suppliers: [{ ...input, id: uid('sup') }, ...current.suppliers] }))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/suppliers`, input)
+        await invalidate()
+        return
+      }
+      setDemoData((current) => ({ ...current, suppliers: [{ ...input, id: uid('sup') }, ...current.suppliers] }))
     },
     createPurchase: async (input) => {
-      if (!demo) { await call('createPurchase', { shopId: shop?.id, input }); return }
-      setData((current) => {
+      if (!demo) {
+        await api.post(`${requireShopPath()}/purchases`, input)
+        await invalidate()
+        return
+      }
+      setDemoData((current) => {
         const supplier = current.suppliers.find((item) => item.id === input.supplierId)
         if (!supplier || !input.items.length) throw new Error('Supplier and at least one item are required')
         const items = input.items.map((item) => ({ ...item, name: current.products.find((product) => product.id === item.productId)?.name ?? 'Product' }))
@@ -153,15 +179,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
       })
     },
     confirmPurchase: async (id) => {
-      if (!demo) { await call('confirmPurchase', { shopId: shop?.id, id }); return }
-      setData((current) => confirmDemoPurchase(current, id, user?.name ?? 'Demo user'))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/purchases/${id}/confirm`, {}, { idempotencyKey: uid('purchase-confirm') })
+        await invalidate()
+        return
+      }
+      setDemoData((current) => confirmDemoPurchase(current, id, user?.name ?? 'Demo user'))
     },
     addExpense: async (input) => {
-      if (!demo) { await call('addExpense', { shopId: shop?.id, input }); return }
-      setData((current) => ({ ...current, expenses: [{ ...input, id: uid('exp') }, ...current.expenses], auditLogs: [audit('expense.recorded', `${input.title} — PKR ${input.amount}`), ...current.auditLogs] }))
+      if (!demo) {
+        await api.post(`${requireShopPath()}/expenses`, input)
+        await invalidate()
+        return
+      }
+      setDemoData((current) => ({ ...current, expenses: [{ ...input, id: uid('exp') }, ...current.expenses], auditLogs: [audit('expense.recorded', `${input.title} — PKR ${input.amount}`), ...current.auditLogs] }))
     },
   }
 
+  useEffect(() => {
+    if (dataQuery.error) toast.error('Could not load shop data')
+  }, [dataQuery.error])
   return <DataContext.Provider value={actions}>{children}</DataContext.Provider>
 }
 

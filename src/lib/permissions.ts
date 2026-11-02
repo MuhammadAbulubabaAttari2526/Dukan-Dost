@@ -3,15 +3,15 @@ import type { Role } from '@/types'
 export type Permission = 'dashboard' | 'products' | 'pos' | 'sales' | 'customers' | 'purchases' | 'expenses' | 'reports' | 'settings' | 'admin'
 
 const access: Record<Permission, Role[]> = {
-  dashboard: ['owner', 'manager', 'cashier', 'super_admin'],
-  products: ['owner', 'manager', 'super_admin'],
-  pos: ['owner', 'manager', 'cashier', 'super_admin'],
-  sales: ['owner', 'manager', 'cashier', 'super_admin'],
-  customers: ['owner', 'manager', 'super_admin'],
-  purchases: ['owner', 'manager', 'super_admin'],
-  expenses: ['owner', 'manager', 'super_admin'],
-  reports: ['owner', 'manager', 'super_admin'],
-  settings: ['owner', 'super_admin'],
+  dashboard: ['owner', 'manager', 'cashier'],
+  products: ['owner', 'manager'],
+  pos: ['owner', 'manager', 'cashier'],
+  sales: ['owner', 'manager', 'cashier'],
+  customers: ['owner', 'manager', 'cashier'],
+  purchases: ['owner', 'manager'],
+  expenses: ['owner', 'manager'],
+  reports: ['owner', 'manager'],
+  settings: ['owner'],
   admin: ['super_admin'],
 }
 

@@ -35,6 +35,7 @@ function Application() {
   const { user, shop, loading } = useAuth()
   if (loading) return <FullScreenLoader />
   if (!user) return <AuthPage />
+  if (user.role === 'super_admin') return <Routes><Route path="/admin" element={<AdminPage />} /><Route path="*" element={<Navigate to="/admin" replace />} /></Routes>
   if (!shop || user.role === 'unassigned') return <OnboardingPage />
   return <DataProvider><Workspace /></DataProvider>
 }
